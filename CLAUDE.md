@@ -260,6 +260,35 @@ Not a single "do everything" AI — a set of small, specialized components
   paper balance from `STARTING_BALANCE_USDT` (1000); an "engine start" line
   records the settings. Strategy logic unchanged. Tested with a fake
   exchange only (Binance unreachable from the test machine).
+- **2026-11-22**: Dashboard + learning agent (deploy steps in
+  `deploy/DASHBOARD.md`, Roman Urdu). `dashboard/` is a Flask app (waitress)
+  served as `crypto-dashboard` on 127.0.0.1:8787, reached from phone/laptop
+  through Tailscale (`tailscale serve`, HTTPS, private to the owner's
+  devices; user chose one link + installable PWA, no native apps). It is
+  READ-ONLY: `data_reader.py` only reads the bot files, and systemd runs it
+  with ProtectSystem=strict so it cannot write the bot folder. One login
+  (user wanted a single simple account): `dashboard/set_password.py` writes
+  a scrypt hash + session secret to /etc/crypto-bot.env; 5 wrong passwords
+  lock logins for 15 min; logins logged in /var/lib/crypto-dashboard. Pages:
+  Home (invested vs now, P/L today/week/month, open position + stop),
+  Charts (P/L bars day/week/month, balance, price with buy/sell markers),
+  Trades (round trips, win rate, fees, AI lesson per loss), Agents
+  (heartbeat: Active/Error/Stopped/Pending + what each is doing), Market,
+  Decisions, Seekhna (lessons), Situation (health checks + known gaps),
+  Emails, Settings (whitelisted keys only; secrets shown as set/not set).
+  `learning_agent.py` (Layer 6, 5th bot service, Nice=10) uses the Google
+  Gemini free tier (`gemini_client.py`, GEMINI_API_KEY; falls back across
+  free flash models; max GEMINI_MAX_CALLS_PER_DAY, waits an hour on 429):
+  per losing trade it sends context (prices, MAs, news, alerts, earlier
+  lessons) and stores reason/lesson/one suggested rule in
+  `data/lessons.jsonl`; a daily market report (mood, risks, new risky news
+  words) in `data/market_reports.jsonl`; once, stats of 2017-2022 backtest
+  losses for rule ideas. Suggested rules are limited to the menu in
+  `rule_lab.py` and backtested there (live 4h strategy, base vs +rule,
+  verdict on 2023-now). Nothing is applied automatically: the user wants
+  an Approve button later (not built yet), and the bot must never change
+  its own rules. Tested locally with fake data, a mocked Gemini and
+  synthetic candles (Binance and Gemini unreachable from the test machine).
 
 ## Key decisions and why (read before changing these)
 - **Strategy chosen: trend/momentum (MA crossover)** over mean-reversion or
@@ -290,6 +319,11 @@ Not a single "do everything" AI — a set of small, specialized components
   missing/old - this is what stops it from trading blind if Layer 3 crashes.
 
 ## Not yet built
+- Dashboard part 3: an Approve button that turns a backtested lesson rule
+  on (decision_agent.py would read an approved-rules file; must log who
+  approved what), and approving new risky news words for
+  anomaly_detector.py. Also: alert email when an agent's heartbeat goes
+  stale, admin controls (pause/resume) with confirmation.
 - `NOTIFY_TO` is not set in the Windows environment variables, so alert
   emails currently go only to `SMTP_USER` itself. It must be set to
   `humzakhan.karachi@gmail.com,iamanusfromcrypto@gmail.com` (comma-separated,

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Bot Dashboard</title>
+  <meta name="theme-color" content="#111110">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="manifest" href="/static/manifest.json">
+  <link rel="icon" href="/static/icon-192.png">
+  <link rel="apple-touch-icon" href="/static/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Bot Dashboard">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="login" class="login-wrap hidden">
+    <form class="login" id="login-form" autocomplete="on">
+      <h1>Bot Dashboard</h1>
+      <div class="sub">Login karein</div>
+      <label for="user">Username</label>
+      <input id="user" name="username" autocomplete="username" required autocapitalize="off">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button class="btn" type="submit">Login</button>
+      <div class="error" id="login-error"></div>
+    </form>
+  </div>
+
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="topline">
+        <span class="mode-badge" id="mode-badge">PAPER TRADING</span>
+        <span class="brand">Bot Dashboard</span>
+        <span class="spacer"></span>
+        <span class="updated" id="updated"></span>
+        <button class="icon-btn" id="refresh" title="Refresh">↻</button>
+        <button class="icon-btn" id="logout">Logout</button>
+      </div>
+      <nav class="tabs" id="tabs"></nav>
+    </header>
+    <main id="view"></main>
+  </div>
+
+  <script src="/static/chart.umd.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

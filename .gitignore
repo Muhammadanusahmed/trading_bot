@@ -46,3 +46,7 @@ Thumbs.db
 desktop.ini
 .claude/settings.local.json
 *.zip
+
+# ---- Dashboard: its icons are code, not results ----
+!dashboard/static/*.png
+dashboard/.state/
