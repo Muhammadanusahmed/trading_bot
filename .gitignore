@@ -1,0 +1,42 @@
+# ---- Secrets: keys and passwords never go to GitHub ----
+.env
+*.env
+.env.*
+!*.env.example
+*.key
+*.pem
+*.ppk
+id_rsa*
+credentials*.json
+secrets*.json
+
+# ---- Bot data and logs (made on the server, not code) ----
+data/
+*.log
+*.jsonl
+*.db
+*.sqlite
+
+# ---- Backtest outputs ----
+*.png
+*.csv
+
+# ---- Duplicate downloads like "execution_engine (1).py" ----
+*(1).py
+*(2).py
+
+# ---- Python ----
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+
+# ---- Editor / OS / Claude local files ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+.claude/settings.local.json
+*.zip
