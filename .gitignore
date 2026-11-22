@@ -16,6 +16,12 @@ data/
 *.jsonl
 *.db
 *.sqlite
+# bot state files (each machine keeps its own)
+trade_state.json
+decision.json
+anomaly_flag.json
+anomaly_state.json
+error_alert_state.json
 
 # ---- Backtest outputs ----
 *.png

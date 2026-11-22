@@ -35,7 +35,13 @@ executes, with safety defaults that must be deliberately turned off:
    if the buy went through it adopts the position (and places the stop); it
    only clears the record once the exchange says the order doesn't exist.
    No new buy is sent while one is still unresolved.
-8. Early warning - once the price falls STOP_WARNING_PERCENT (default 1.5%)
+8. Paper trading - with DRY_RUN on, the engine needs no API keys and reads
+   the REAL market's public prices (not the testnet's), whatever
+   USE_TESTNET says, since it sends no orders. It charges FEE_PERCENT on each
+   paper buy and sell, fills the stop-loss itself when the price reaches it
+   (there is no exchange-side stop to do it), and keeps a paper balance that
+   starts at STARTING_BALANCE_USDT, so the trade log gives a real P/L.
+9. Early warning - once the price falls STOP_WARNING_PERCENT (default 1.5%)
    below the entry, both NOTIFY_TO addresses get one email per position
    saying the stop-loss is close, so a human can look before it sells. The
    stop itself stays on the exchange and sells regardless of the email.
@@ -51,6 +57,7 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 
+from agent_status import heartbeat
 from email_utils import send_email, alert_error
 
 load_dotenv()
@@ -75,6 +82,10 @@ STOP_LOSS_PERCENT = float(os.environ.get("STOP_LOSS_PERCENT", 2.0))
 STOP_WARNING_PERCENT = float(os.environ.get("STOP_WARNING_PERCENT", 1.5))
 CHECK_INTERVAL_SECONDS = int(os.environ.get("EXECUTION_CHECK_INTERVAL_SECONDS", 300))
 DECISION_MAX_AGE_MINUTES = int(os.environ.get("DECISION_MAX_AGE_MINUTES", 20))
+# Binance spot taker fee is 0.1% per side (0.075% when paying fees in BNB)
+FEE_PERCENT = float(os.environ.get("FEE_PERCENT", 0.1))
+# paper account size the weekly P/L is measured against
+STARTING_BALANCE_USDT = float(os.environ.get("STARTING_BALANCE_USDT", 1000))
 STOP_PLACE_ATTEMPTS = 3
 STOP_RETRY_DELAY_SECONDS = 2
 # a buy the exchange can't find yet may just not be visible yet - only treat it
@@ -92,12 +103,14 @@ FLAT_STATE = {"in_position": False, "entry_price": None, "quantity": None, "stop
 def make_exchange():
     exchange_class = getattr(ccxt, EXCHANGE)
     exchange = exchange_class({
-        "apiKey": API_KEY,
-        "secret": API_SECRET,
+        # paper trading only reads public market data, so it needs no keys
+        "apiKey": "" if DRY_RUN else API_KEY,
+        "secret": "" if DRY_RUN else API_SECRET,
         # adjustForTimeDifference: Binance rejects signed requests if the local clock drifts >1s (error -1021)
         "options": {"fetchMarkets": ["spot"], "adjustForTimeDifference": True},
     })
-    if USE_TESTNET:
+    # paper trading must see real-market prices; the testnet's prices are not the real market's
+    if USE_TESTNET and not DRY_RUN:
         exchange.set_sandbox_mode(True)
     if not DRY_RUN:
         exchange.load_markets()  # needed for amount/price precision on real orders
@@ -307,13 +320,56 @@ def reconcile(exchange, state):
     return state
 
 
-def enter_position(exchange, state, price):
+def paper_balance(state):
+    return STARTING_BALANCE_USDT + state.get("paper_realized_pnl_usdt", 0.0)
+
+
+def paper_close(state, action, exit_price, reason):
+    """Close the paper position at exit_price and log its P/L after fees."""
+    quantity = float(state["quantity"])
+    entry_price = float(state["entry_price"])
+    exit_fee = exit_price * quantity * FEE_PERCENT / 100
+    entry_fee = float(state.get("entry_fee_usdt") or 0)
+    gross_pnl = (exit_price - entry_price) * quantity
+    net_pnl = gross_pnl - entry_fee - exit_fee
+    state["paper_realized_pnl_usdt"] = state.get("paper_realized_pnl_usdt", 0.0) + net_pnl
+    log_trade(action, {
+        "symbol": SYMBOL, "price": exit_price, "quantity": quantity,
+        "value_usdt": exit_price * quantity, "fee_usdt": exit_fee,
+        "entry_price": entry_price, "entry_time": state.get("entry_time"),
+        "gross_pnl_usdt": gross_pnl, "fees_total_usdt": entry_fee + exit_fee, "net_pnl_usdt": net_pnl,
+        "pnl_percent": net_pnl / (entry_price * quantity) * 100,
+        "paper_balance_usdt": paper_balance(state), "reason": reason,
+    })
+    for key in ("entry_time", "entry_fee_usdt"):
+        state.pop(key, None)
+    state.update(FLAT_STATE)
+
+
+def paper_stop_check(state, price):
+    """DRY_RUN has no exchange-side stop, so fill it here when the price
+    reaches it, at the limit price the live stop order would use."""
+    if not state["in_position"]:
+        return
+    stop_price = float(state["entry_price"]) * (1 - STOP_LOSS_PERCENT / 100)
+    if price > stop_price:
+        return
+    paper_close(state, "DRY_RUN stop-loss filled", stop_price * 0.999,
+                f"price {price} reached the {STOP_LOSS_PERCENT}% stop at {stop_price:.2f}")
+    state["wait_for_flat"] = True  # same rule as a live stop-out
+    save_state(state)
+
+
+def enter_position(exchange, state, price, reason=None):
     raw_quantity = TRADE_AMOUNT_USDT / price
 
     if DRY_RUN:
         stop_price = price * (1 - STOP_LOSS_PERCENT / 100)
-        log_trade("DRY_RUN buy", {"symbol": SYMBOL, "price": price, "quantity": raw_quantity, "stop_price": stop_price})
-        state.update({"in_position": True, "entry_price": price, "quantity": raw_quantity, "stop_order_id": None, "stop_warning_sent": False})
+        fee = price * raw_quantity * FEE_PERCENT / 100
+        state.update({"in_position": True, "entry_price": price, "quantity": raw_quantity, "stop_order_id": None, "stop_warning_sent": False,
+                      "entry_time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()), "entry_fee_usdt": fee})
+        log_trade("DRY_RUN buy", {"symbol": SYMBOL, "price": price, "quantity": raw_quantity, "value_usdt": price * raw_quantity,
+                                  "fee_usdt": fee, "stop_price": stop_price, "paper_balance_usdt": paper_balance(state), "reason": reason})
         save_state(state)
         return
 
@@ -337,10 +393,9 @@ def enter_position(exchange, state, price):
     adopt_buy(exchange, state, order, price, quantity)
 
 
-def exit_position(exchange, state, price):
+def exit_position(exchange, state, price, reason=None):
     if DRY_RUN:
-        log_trade("DRY_RUN sell", {"symbol": SYMBOL, "price": price, "quantity": state["quantity"]})
-        state.update(FLAT_STATE)
+        paper_close(state, "DRY_RUN sell", price, reason)
         save_state(state)
         return
 
@@ -380,7 +435,7 @@ def warn_if_near_stop(state, price):
     if drop_percent < STOP_WARNING_PERCENT:
         return
     stop_price = entry * (1 - STOP_LOSS_PERCENT / 100)
-    network = "TESTNET" if USE_TESTNET else "REAL EXCHANGE"
+    network = "PAPER TRADING, no real order" if DRY_RUN else ("TESTNET" if USE_TESTNET else "REAL EXCHANGE")
     urgent_email(
         f"Crypto bot WARNING: {SYMBOL} down {drop_percent:.1f}%, stop-loss close",
         f"{SYMBOL} is {drop_percent:.2f}% below the entry price ({network}).\n\n"
@@ -405,6 +460,8 @@ def run_once(exchange, state):
         state = reconcile(exchange, state)
 
     price = exchange.fetch_ticker(SYMBOL)["last"]  # fresh price for order sizing, not the decision's cached one
+    if DRY_RUN:
+        paper_stop_check(state, price)
     warn_if_near_stop(state, price)  # before the decision check, so a stuck Layer 3 can't silence it
 
     decision = read_decision()
@@ -420,9 +477,9 @@ def run_once(exchange, state):
     if desired_position == 1 and not state["in_position"] and state.get("wait_for_flat"):
         print("Stopped out earlier - waiting for the trend signal to go flat before buying again.")
     elif desired_position == 1 and not state["in_position"]:
-        enter_position(exchange, state, price)
+        enter_position(exchange, state, price, decision["reason"])
     elif desired_position == 0 and state["in_position"]:
-        exit_position(exchange, state, price)
+        exit_position(exchange, state, price, decision["reason"])
     else:
         print(f"No change. In position: {state['in_position']}, price: {price}. Reason: {decision['reason']}")
 
@@ -431,18 +488,26 @@ def run_once(exchange, state):
 
 if __name__ == "__main__":
     mode = "DRY RUN (no real orders)" if DRY_RUN else "LIVE ORDERS"
-    network = "TESTNET" if USE_TESTNET else "REAL EXCHANGE"
+    network = "REAL MARKET PRICES (public data, no keys)" if DRY_RUN else ("TESTNET" if USE_TESTNET else "REAL EXCHANGE")
     print(f"Execution engine starting - mode: {mode}, network: {network}, symbol: {SYMBOL}")
     if not DRY_RUN and not USE_TESTNET:
         print("!!! LIVE TRADING WITH REAL MONEY ON A REAL EXCHANGE !!!")
 
     exchange = make_exchange()
     state = load_state()
+    # one line per start, so the weekly report knows the settings and balance it ran with
+    log_trade("engine start", {"symbol": SYMBOL, "mode": "DRY_RUN" if DRY_RUN else "LIVE", "network": network,
+                               "starting_balance_usdt": STARTING_BALANCE_USDT, "paper_balance_usdt": paper_balance(state) if DRY_RUN else None,
+                               "trade_amount_usdt": TRADE_AMOUNT_USDT, "fee_percent": FEE_PERCENT, "stop_loss_percent": STOP_LOSS_PERCENT,
+                               "in_position": state["in_position"]})
 
     while True:
         try:
             state = run_once(exchange, state)
+            heartbeat("execution_engine", mode="DRY_RUN" if DRY_RUN else "LIVE", in_position=state["in_position"],
+                      paper_balance_usdt=paper_balance(state) if DRY_RUN else None)
         except Exception as e:
             print(f"Error: {e}")
+            heartbeat("execution_engine", "error", e)
             alert_error("execution_engine", e)
         time.sleep(CHECK_INTERVAL_SECONDS)

@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 
+from agent_status import heartbeat, append_jsonl
 from email_utils import alert_error
 
 load_dotenv()
@@ -38,6 +39,7 @@ BASE_DIR = Path(__file__).parent
 NEWS_LOG = BASE_DIR / "data" / "news_log.jsonl"
 ANOMALY_FLAG_FILE = BASE_DIR / "anomaly_flag.json"
 DECISION_FILE = BASE_DIR / "decision.json"
+DECISION_HISTORY = BASE_DIR / "data" / "decision_history.jsonl"
 
 
 def get_ma_signal(exchange):
@@ -106,6 +108,15 @@ def decide(exchange):
         "recent_headlines_considered": headlines,
     }
     DECISION_FILE.write_text(json.dumps(decision, indent=2))
+    # history for the weekly report; headline text stays in news_log.jsonl
+    append_jsonl(DECISION_HISTORY, {
+        "time": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(decision["timestamp"])),
+        **{k: v for k, v in decision.items() if k != "recent_headlines_considered"},
+        "fast_ma": fast_ma,
+        "slow_ma": slow_ma,
+        "ma_position": ma_position,
+        "headline_count": len(headlines),
+    })
     print(f"Decision: position={position} | {reason}")
     return decision
 
@@ -116,8 +127,10 @@ if __name__ == "__main__":
 
     while True:
         try:
-            decide(exchange)
+            decision = decide(exchange)
+            heartbeat("decision_agent", last_position=decision["position"])
         except Exception as e:
             print(f"Error: {e}")
+            heartbeat("decision_agent", "error", e)
             alert_error("decision_agent", e)
         time.sleep(CHECK_INTERVAL_SECONDS)

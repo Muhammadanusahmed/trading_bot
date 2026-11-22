@@ -243,6 +243,23 @@ Not a single "do everything" AI — a set of small, specialized components
   rule. Now it only emails, at most once per `VOLUME_ALERT_COOLDOWN_MINUTES`
   (60). Price shock and news matches still force flat.
   `VOLUME_SPIKE_FORCES_FLAT=true` restores the old behaviour.
+- **2026-11-22**: Phase 1 data recording before the one-week paper-trading
+  run (DRY_RUN=true, no exchange keys) on the new Oracle server; a dashboard
+  will read these files later. New `agent_status.py`: every layer writes
+  `data/heartbeat/<agent>.json` each loop (last_run, status ok/error,
+  last_error, runs, errors, restarts). `decision_agent.py` appends every
+  decision to `data/decision_history.jsonl` (headline text stays in
+  news_log). `email_utils.send_email` logs each attempt to
+  `data/email_log.jsonl` (time, agent, subject, sent/failed/skipped).
+  `anomaly_detector.py` logs alerts to `data/anomaly_log.jsonl`, and a failed
+  alert email no longer stops the force-flat flag being written.
+  `execution_engine.py` in DRY_RUN: uses no API keys and real-market public
+  prices (it used to switch to testnet prices when USE_TESTNET=true), charges
+  `FEE_PERCENT` (0.1) per side, fills the 2% stop itself (no exchange-side
+  stop in paper mode), and logs price, qty, value, fee, reason, P/L and a
+  paper balance from `STARTING_BALANCE_USDT` (1000); an "engine start" line
+  records the settings. Strategy logic unchanged. Tested with a fake
+  exchange only (Binance unreachable from the test machine).
 
 ## Key decisions and why (read before changing these)
 - **Strategy chosen: trend/momentum (MA crossover)** over mean-reversion or

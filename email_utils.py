@@ -3,11 +3,14 @@
 import json
 import os
 import smtplib
+import sys
 import time
 from email.mime.text import MIMEText
 from email.utils import formatdate, make_msgid
 from pathlib import Path
 from dotenv import load_dotenv
+
+from agent_status import append_jsonl, utc_now
 
 load_dotenv()
 
@@ -20,13 +23,36 @@ NOTIFY_TO = [addr.strip() for addr in os.environ.get("NOTIFY_TO", SMTP_USER or "
 
 ERROR_ALERT_COOLDOWN_MINUTES = int(os.environ.get("ERROR_ALERT_COOLDOWN_MINUTES", 30))
 _ERROR_STATE_FILE = Path(__file__).parent / "error_alert_state.json"
+EMAIL_LOG = Path(__file__).parent / "data" / "email_log.jsonl"
 
 
-def send_email(subject, body):
+def _log_email(agent, subject, status, error=None):
+    append_jsonl(EMAIL_LOG, {
+        "time": utc_now(),
+        "agent": agent or Path(sys.argv[0]).stem,  # the script that is running
+        "subject": subject,
+        "to": NOTIFY_TO,
+        "status": status,  # sent / failed / skipped
+        "error": str(error)[:300] if error else None,
+    })
+
+
+def send_email(subject, body, agent=None):
+    """Send to NOTIFY_TO and record the attempt in data/email_log.jsonl.
+    Raises on failure, as before, so callers keep their own handling."""
     if not SMTP_USER or not SMTP_PASSWORD:
         print(f"[email skipped - SMTP_USER/SMTP_PASSWORD not set in .env] {subject}: {body}")
+        _log_email(agent, subject, "skipped", "SMTP_USER/SMTP_PASSWORD not set")
         return
+    try:
+        _send(subject, body)
+    except Exception as e:
+        _log_email(agent, subject, "failed", e)
+        raise
+    _log_email(agent, subject, "sent")
 
+
+def _send(subject, body):
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = f"Crypto Trading Bot <{FROM_EMAIL}>"
@@ -58,7 +84,7 @@ def alert_error(component, error):
         return
 
     try:
-        send_email(f"Crypto bot: {component} hit an error", str(error))
+        send_email(f"Crypto bot: {component} hit an error", str(error), agent=component)
         state[component] = now
         _ERROR_STATE_FILE.write_text(json.dumps(state))
     except Exception as email_error:

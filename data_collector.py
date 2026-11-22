@@ -18,6 +18,7 @@ import time
 from pathlib import Path
 from dotenv import load_dotenv
 
+from agent_status import heartbeat
 from email_utils import alert_error
 
 load_dotenv()
@@ -107,9 +108,11 @@ if __name__ == "__main__":
                 seen_links = log_news(seen_links)
                 save_seen_links(seen_links)
                 last_news_log = time.time()
+            heartbeat("data_collector")
 
         except Exception as e:
             print(f"Error: {e}")
+            heartbeat("data_collector", "error", e)
             alert_error("data_collector", e)
 
         time.sleep(PRICE_LOG_INTERVAL_SECONDS)

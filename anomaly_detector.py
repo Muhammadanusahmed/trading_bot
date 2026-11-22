@@ -32,6 +32,7 @@ from collections import deque
 from pathlib import Path
 from dotenv import load_dotenv
 
+from agent_status import heartbeat, append_jsonl
 from email_utils import send_email, alert_error
 
 load_dotenv()
@@ -64,6 +65,7 @@ NEWS_KEYWORDS = [
 
 STATE_FILE = Path(__file__).parent / "anomaly_state.json"
 FLAG_FILE = Path(__file__).parent / "anomaly_flag.json"
+ALERT_LOG = Path(__file__).parent / "data" / "anomaly_log.jsonl"
 
 
 def load_state():
@@ -78,7 +80,12 @@ def save_state(state):
 
 def raise_alert(reason, details, force_flat=True):
     print(f"[ALERT] {reason}: {details}")
-    send_email(f"Crypto bot alert: {reason}", details)
+    append_jsonl(ALERT_LOG, {"timestamp": time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime()), "reason": reason, "details": details, "forced_flat": force_flat})
+    try:
+        send_email(f"Crypto bot alert: {reason}", details)
+    except Exception as e:
+        # a failed email must not stop the force-flat flag below from being written
+        print(f"Alert email failed: {e}")
     if not force_flat:
         return
     FLAG_FILE.write_text(json.dumps({
@@ -173,9 +180,11 @@ if __name__ == "__main__":
                 state = check_news(state)
                 save_state(state)
                 last_news_check = time.time()
+            heartbeat("anomaly_detector")
 
         except Exception as e:
             print(f"Error: {e}")
+            heartbeat("anomaly_detector", "error", e)
             alert_error("anomaly_detector", e)
 
         time.sleep(PRICE_CHECK_INTERVAL_SECONDS)

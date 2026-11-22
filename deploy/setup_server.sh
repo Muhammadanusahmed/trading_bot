@@ -57,10 +57,10 @@ EOF
 done
 systemctl daemon-reload
 
-if grep -q "your_testnet_api_key" "$ENV_FILE"; then
+if grep -q "your_email@gmail.com\|your_testnet_api_key" "$ENV_FILE"; then
     echo
     echo "Setup done, but the bot is NOT started yet."
-    echo "Next: nano $ENV_FILE   (fill in your keys), then run:"
+    echo "Next: nano $ENV_FILE   (fill in your email settings; exchange keys stay empty for DRY_RUN), then run:"
     echo "  systemctl enable --now crypto-data_collector crypto-anomaly_detector crypto-decision_agent crypto-execution_engine"
     exit 0
 fi
